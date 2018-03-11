@@ -5,7 +5,7 @@ from game import Game
 
 
 def main():
-    game = Game(save_oper=True)
+    game = Game()
     while not game.gameover():
         game.step()
         if game.quit():

@@ -2,13 +2,15 @@
 #coding: utf-8
 
 import random
-
+#random.seed(0)
 
 class ShapeFactory:
     def create(self, top_center):
         ''' top_center=(0, 7), 指的是创建的形状尽量使用 (0, 7) 作为其实位置
         '''
         n = random.randint(1, 7)    # 7 种基本形状
+        # TEST:
+        #n = 3 # 总生成方块, 用于训练．．
         class_name = 'Shape_{}'.format(n)
         shape = eval(class_name)(top_center)
         return shape
@@ -65,9 +67,9 @@ class Shape(object):
 
     def rotate(self):
         ''' 其实这种单方向旋转的形状, 可以将a,c,d标记为从b出发的向量, 顺时针旋转就是乘以 [0, 1]
-                                                                                   [-1, 0]
+                                                                             [-1, 0]
             比如 a [-1] x [0, 1] = [0]  就是说 a 旋转后, 相对 b 的位置变为 [0]
-                   [0 ]   [-1,0]   [1]                                   [1]
+                   [0 ]   [-1,0]   [1]                                [1]
         '''
         # 使用 b 作为圆心
         M = ((0,1),(-1,0))  # 顺时针旋转90度变换矩阵
