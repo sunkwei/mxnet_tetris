@@ -11,6 +11,8 @@ class ShapeFactory:
         n = random.randint(1, 7)    # 7 种基本形状
         # TEST:
         #n = 3 # 总生成方块, 用于训练．．
+        # while n == 2:
+        #     n = random.randint(1,7)
         class_name = 'Shape_{}'.format(n)
         shape = eval(class_name)(top_center)
         return shape
@@ -88,7 +90,7 @@ class Shape_1(Shape):
         super(Shape_1, self).__init__()
         mode = random.randint(0, 1)
         if mode == 0:
-            self.poss_ = [(0,c-1), (0,c), (1,c), (1,c+1)]
+            self.poss_ = [(1,c-1), (1,c), (2,c), (2,c+1)]
         else:
             self.poss_ = [(2,c-1), (1,c-1), (1,c), (0,c)]
 
@@ -130,7 +132,7 @@ class Shape_2(Shape):
         super(Shape_2, self).__init__()
         mode = random.randint(0, 1)
         if mode == 0:
-            self.poss_ = [(0,c+1), (0,c), (1,c), (1,c-1)]
+            self.poss_ = [(1,c+1), (1,c), (2,c), (2,c-1)]
         else:
             self.poss_ = [(0, c), (1,c), (1,c+1), (2,c+1)]
 

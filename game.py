@@ -16,7 +16,7 @@ curr_path = osp.dirname(osp.abspath(__file__))
 MODE = 'train'        # 如果生成键盘序列，作为 "train" 集合，还是 "val" 集合？
 START_LEVEL = 1       # 从 8 开始，方便快速生成样本
 EPOCH = 29 # 当自动时,使用的 epoch
-TRY = True # 使用规则 auto_xxx()
+AUTO_USING_RULE = True # 使用规则 auto_xxx()
 
 
 # 方向按键对应的数值
@@ -47,7 +47,7 @@ class Game:
         self.shapes_ = 0
         self.curr_level_ = START_LEVEL
         self.eliminate_rows_ = 10*self.curr_level_ # :)
-        self.level_intervals_ = [1.0, 0.75, 0.6, 0.55, 0.5, 0.475, 0.450, 0.4, 0.375,] #
+        self.level_intervals_ = [1.0, 0.75, 0.6, 0.55, 0.5, 0.475, 0.450, 0.4, 0.375, 0.35, 0.33, 0.3, 0.25, 0.2, 0.1] #
         self.data_ = [[0 for i in range(self.cols_)] for i in range(self.rows_)]  # 一个二维数组标识当前数据 ...
         self.shape_ = None
         self.quit_ = False
@@ -55,7 +55,7 @@ class Game:
         self.show_ = Show()
         self.auto_ = autoplay
         if self.auto_:
-            if not TRY:
+            if not AUTO_USING_RULE:
                 from inference_rnn import Inference
                 self.pred_ = Inference(epoch=EPOCH)    # 加载 rnn 模型进行预测 ...
         
@@ -119,8 +119,8 @@ class Game:
             timeout = 1
         if not self.auto_:
             return 0xff & self.show_.wait_key(timeout)
-        elif TRY:
-            return 0xff & self.show_.wait_key(50)
+        elif AUTO_USING_RULE:
+            return 0xff & self.show_.wait_key(10)
         else:
             # 使用 self.pred_ 进行预测 ...
             img = self.data2np()
@@ -141,8 +141,8 @@ class Game:
 
     def interact(self):
         if self.auto_:
-            if TRY:
-                self.interact0(0.2)
+            if AUTO_USING_RULE:
+                self.interact0(0.01)
             else:
                 # FIXME: 因为在一行上，可能联系平移，这里给多次机会吧
                 for i in range(1):
@@ -214,7 +214,7 @@ class Game:
         self.shapes_ += 1
         self.save_rnn_begin()
         if self.auto_:
-            if not TRY:
+            if not AUTO_USING_RULE:
                 self.pred_.reset()
         return True
 
@@ -233,7 +233,7 @@ class Game:
             
             if self.shapes_ == 33:
                 aa = 0
-            if self.auto_ and TRY:
+            if self.auto_ and AUTO_USING_RULE:
                 # 此时找到最佳位置
                 pos = self.select_best_pos()
                 self.move(pos)
@@ -354,31 +354,20 @@ class Game:
 
         self.restore_all()
 
-        # 根据 result 找出最合理的 start_poss
-        # 先扔掉"洞"多的,再找消除行多的,最后找空行最多的
-        results = np.array(all_down_results)
+        # 使用权重吧, holes * 3.0 + (self.rows_ - elims) * 2.0 + (self.rows_ - els) * 1.0 + mse * .01
+        rs = [ h*10.0 - e*5.0 + n*1.0 + m*1.0 for h,e,n,m in all_down_results ]
+        rs = np.array(rs)
+        idx = np.argmin(rs)
+        idx_min = np.where(rs == rs[idx])[0]
+        idx = random.randint(0, len(idx_min)-1)
+        best_idx = idx_min[idx].item()
         
-        holes = results[:,0]
-        min_h = np.argmin(holes) # 从第一列中找出"洞"最少的
-        idx_holes = np.where(results[:,0] == holes[min_h])
-        idx_holes = idx_holes[0]
-        elims = results[idx_holes]    # 这些行中, 第一列对应"洞"最少的, 从中查找
+        print('==> v={}, h:{}, elims:{}, els:{}, mse:{}'.format(
+                rs[idx],
+                all_down_results[best_idx][0],
+                all_down_results[best_idx][1], all_down_results[best_idx][2],
+                all_down_results[best_idx][3]))
 
-        max_elims = np.argmax(elims[:,1])  # 从第二列中找出消除最多的行数
-        idx_elims = np.where(elims[:,1] == elims[:,1][max_elims])
-        idx_elims = idx_elims[0]
-        els = elims[idx_elims]      # 这些行对应着"洞最少",并且消除行最多的
-
-        max_els = np.argmax(els[:,2]) # 从第三列找出保留空行最多的
-        idx_els = np.where(els[:,2] == els[:,2][max_els])
-        idx_els = idx_els[0]
-
-        best_idx = idx_holes[idx_elims][idx_els]
-        best_idx = best_idx.tolist()[0]
-
-        print('best pos: {}, I:{}/{}/{}'.format(all_start_poss[best_idx], 
-                holes[min_h], elims[:,1][max_elims], els[:,2][max_els]))
-        
         return all_start_poss[best_idx]
 
     def auto_get_all_start_poss(self):
@@ -424,7 +413,8 @@ class Game:
             poss = self.shape_.down()
         data = self.data2np()
         
-        return (self.auto_get_holes(data), self.auto_get_elims(data), self.auto_get_empty_lines(data))
+        return (self.auto_get_holes(data), self.auto_get_elims(data), 
+                self.auto_get_neighbor_delta(data), self.auto_get_mse(data))
 
     def auto_get_holes(self, d):
         ''' 从 self.data_ 最低开始, 水平找到 0 后, 向上找, 如果右非 0 则认为是空洞
@@ -443,6 +433,25 @@ class Game:
                     n += 1
             holes += n
         return holes
+
+    def auto_get_mse(self, d):
+        ''' 每列从低向上看, 根据高度计算 mse, 要尽量保证 mse 比较小
+        '''
+        # 需要临时清空当前 shape_ 的占用
+        # for p in self.shape_.poss():
+        #     d[p[0]][p[1]] = 0
+        
+        cs = np.split(d, self.cols_, axis=1)
+        cs = [ c.reshape((self.rows_,)) for c in cs ]
+        hs = [ np.nonzero(c)[0] for c in cs ]
+        hs = [ self.rows_ - h[0].item() if len(h) > 0 else 0 for h in hs ]
+        hs = np.array(hs)
+
+        # for p in self.shape_.poss():
+        #     d[p[0]][p[1]] = self.shape_.d()
+
+        mse = np.sqrt(np.sum(np.power(hs - np.mean(hs), 2)))
+        return mse.item()
                     
     def auto_get_elims(self, d):
         ''' 检查消除的行数
@@ -453,6 +462,21 @@ class Game:
             if 0 not in ds:
                 rows += 1
         return rows
+
+    def auto_get_neighbor_delta(self, d):
+        ''' 获取相邻高度差的和，就是说，要尽量不出现相邻海拔差大的情况，这种情况往往只能依赖“竖棍”才能消除
+        '''
+        cs = np.split(d, self.cols_, axis=1)
+        cs = [ c.reshape((self.rows_,)) for c in cs ]
+        hs = [ np.nonzero(c)[0] for c in cs ]
+        hs = [ self.rows_ - h[0].item() if len(h) > 0 else 0 for h in hs ]
+        
+        s = 0
+        import math
+        for i in range(len(hs)-1):
+            s += math.fabs(hs[i+1] - hs[i])
+
+        return s
         
     def auto_get_empty_lines(self, d):
         ''' 返回完整的空行数
