@@ -14,7 +14,7 @@ from collections import namedtuple
 
 
 curr_path = osp.dirname(osp.abspath(__file__))
-MAX_SEQ_LENGTH = 30 # FIXME: 最长按键序列，不够的补0，照理说应该使用 bucketing mode
+MAX_SEQ_LENGTH = 15 # FIXME: 最长按键序列，不够的补0，照理说应该使用 bucketing mode
 RNN_HIDDEN_NUM = 256
 RNN_LAYERS_NUM = 3
 OUT_NUM = 7 # 标签数目
@@ -160,23 +160,23 @@ def build_net():
     # conv1, conv2
     conv1_weight = mx.sym.var(name='conv1_weight')
     conv1_bias = mx.sym.var(name='conv1_bias')
-    conv2_weight = mx.sym.var(name='conv2_weight')
-    conv2_bias = mx.sym.var(name='conv2_bias')
-    conv3_weight = mx.sym.var(name='conv3_weight')
-    conv3_bias = mx.sym.var(name='conv3_bias')
+    # conv2_weight = mx.sym.var(name='conv2_weight')
+    # conv2_bias = mx.sym.var(name='conv2_bias')
+    # conv3_weight = mx.sym.var(name='conv3_weight')
+    # conv3_bias = mx.sym.var(name='conv3_bias')
     conv_outs = []
     for frame in frames:
         # frame: (batch, 1, rows, cols)
         conv1 = mx.sym.Convolution(frame, weight=conv1_weight, bias=conv1_bias,
-                num_filter=16, kernel=(4,4), pad=(1,1))
-        act1 = mx.sym.Activation(conv1, act_type='tanh')
-        conv2 = mx.sym.Convolution(act1, weight=conv2_weight, bias=conv2_bias,
-                num_filter=64, kernel=(4,4), stride=(2,2))
-        act2 = mx.sym.Activation(conv2, act_type='tanh')
-        # conv3 = mx.sym.Convolution(act2, weight=conv3_weight, bias=conv3_bias,
+                num_filter=16, kernel=(4,4), pad=(1,1), stride=(2,2))
+        act = mx.sym.Activation(conv1, act_type='relu')
+        # conv2 = mx.sym.Convolution(act, weight=conv2_weight, bias=conv2_bias,
+        #         num_filter=64, kernel=(4,4), stride=(2,2))
+        # act = mx.sym.Activation(conv2, act_type='tanh')
+        # conv3 = mx.sym.Convolution(act, weight=conv3_weight, bias=conv3_bias,
         #         num_filter=128, kernel=(3,3), stride=(2,2))
-        # act3 = mx.sym.Activation(conv3, act_type='relu')
-        out = mx.sym.reshape(act2, shape=(0,1,-1))  # 保持 batch 不变，
+        # act = mx.sym.Activation(conv3, act_type='relu')
+        out = mx.sym.reshape(act, shape=(0,1,-1))  # 保持 batch 不变，
         conv_outs.append(out)
 
     data = conv_outs
@@ -222,7 +222,7 @@ def train(resume_epoch=-1):
     else:
         init = mx.init.Xavier(factor_type='in', magnitude=2.34)
         mod.init_params(init)
-    mod.init_optimizer(optimizer='sgd', optimizer_params=(('learning_rate',0.001), ('momentum',0.7)))
+    mod.init_optimizer(optimizer='sgd', optimizer_params=(('learning_rate',0.001), ('momentum',0.9)))
     #
     ds_train = DataSource(prefix=curr_path+'/rnn_train')
     ds_val = DataSource(prefix=curr_path+'/rnn_val')

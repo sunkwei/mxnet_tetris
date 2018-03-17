@@ -54,6 +54,7 @@ class Game:
         self.pause_ = False
         self.show_ = Show()
         self.auto_ = autoplay
+        self.reset_cnt_ = 0
         if self.auto_:
             if not AUTO_USING_RULE:
                 from inference_rnn import Inference
@@ -106,6 +107,7 @@ class Game:
 
         for p in old_poss:
             self.data_[p[0]][p[1]] = 0  # 旧位置清空
+
         for p in poss:
             self.data_[p[0]][p[1]] = self.shape_.d()
         self.shape_.set_poss(poss)
@@ -122,23 +124,37 @@ class Game:
         elif AUTO_USING_RULE:
             return 0xff & self.show_.wait_key(10)
         else:
-            # 使用 self.pred_ 进行预测 ...
-            img = self.data2np()
-            key = self.pred_.pred(img)
-            keys = {
-                0: 0,           # 0, 1 将被忽略 ...
-                1: 1, 
-                2: LEFT,
-                3: UP,
-                4: RIGHT,
-                5: DOWN,
-                6: 32,
-            }
-            self.show_.wait_key(timeout)
-            if key == 5:
-                key = 0
-            return keys[key]
+            ''' 使用 self.pred_ 进行预测 ...
+                最多预测20次, 直到得到 6(空格)
+                其他按键, 则移动到下一个位置, 然后再次预测 ...
+                所以这里总是返回空格按键
+            '''
+            return self.pred_seq()
 
+    def pred_seq(self):
+        ''' 循环预测, 直到返回6, 或者超过20次预测
+        '''
+        for i in range(20):
+            k = self.pred_.pred(self.data2np())
+            if k == 6:
+                return 32  # 结束
+            
+            if k == 0 or k == 1 or k == 5:
+                continue
+
+            if k == 2:
+                poss = self.shape_.left()
+            elif k == 3:
+                poss = self.shape_.rotate()
+            elif k == 4:
+                poss = self.shape_.right()
+            
+            if self.can_move(poss):
+                self.move(poss)
+
+        print('oooooh, cannot got space, JUST do it')
+        return 32
+                
     def interact(self):
         if self.auto_:
             if AUTO_USING_RULE:
@@ -170,10 +186,8 @@ class Game:
             if key in keymaps:
                 poss = keymaps[key]()
                 if self.can_move(poss):
-                    self.save_rnn_key(key)
                     self.move(poss)
             elif key == 32:
-                self.save_rnn_key(32)
                 poss = self.shape_.down()
                 while self.can_move(poss):
                     self.move(poss)
@@ -212,7 +226,6 @@ class Game:
             return False
         self.move(poss)
         self.shapes_ += 1
-        self.save_rnn_begin()
         if self.auto_:
             if not AUTO_USING_RULE:
                 self.pred_.reset()
@@ -231,12 +244,28 @@ class Game:
                 self.over_ = True
                 return
             
-            if self.shapes_ == 33:
-                aa = 0
             if self.auto_ and AUTO_USING_RULE:
                 # 此时找到最佳位置
+                self.save_all()
                 pos = self.select_best_pos()
+                keys = self.get_key_seq(self.shape_.poss(), pos)
+                keys.append(32) # 追加一个空格...
+                self.restore_all()
+                self.save_image_keys(keys)
                 self.move(pos)
+
+        # 当自动保存样本时，如果最高行超过10行，则强制清空所有
+        if self.save_rnn_:
+            # if self.auto_get_empty_lines(self.data2np()) < self.rows_ / 2:
+            # 为了生成初始状态的样本，总是尽快的清空，当消除行后，立即清空，然后从头再来
+            if self.eliminate_rows_ > 0:
+                self.data_ = [[0 for i in range(self.cols_)] for i in range(self.rows_)]  # 一个二维数组标识当前数据 ...
+                self.shape_ = None
+                self.reset_cnt_ += 1
+                print('RESET ALL {} times'.format(self.reset_cnt_))
+                self.eliminate_rows_ = 0
+                return
+
 
         # 处理键盘事件    
         self.interact()
@@ -246,12 +275,10 @@ class Game:
         if not self.pause_:
             poss = self.shape_.down()
             if self.can_move(poss):
-                self.save_rnn_key(DOWN)
                 self.move(poss)
             else:
                 # 当前形状已经无法移动, 准备生成下一个 ...
                 self.shape_ = None
-                self.save_rnn_end()
                 # 清除满行
                 self.eliminate_rows_ += self.clear_rows()
                 self.curr_level_ = self.eliminate_rows_ // 10   # 每十行增加一级 ...
@@ -298,7 +325,7 @@ class Game:
             将 rnn_ops_ 中的操作合并
         '''
         if self.save_rnn_:
-            self.rnn_ops_.append((self.data2np(), 1))
+            #self.rnn_ops_.append((self.data2np(), 1))
             if len(self.rnn_ops_) >= 50:
                 print('WARN: the rnn seq tooooo long !!!')
                 return
@@ -325,6 +352,62 @@ class Game:
             self.rnn_ops_.append((self.data2np(), keys[key]))
 
     #########################################################################################
+    def get_key_seq(self, curr_poss, target_poss):
+        ''' 找出, 从 curr_poss 到 target_poss 需要的按键序列
+                通过 curr_poss[0], [1] 的方向,和 target_poss[0], [1] 的方向计算需要旋转的次数
+                然后通过 target_poss[0] 与 curr_poss[0] 的位移, 计算平移的次数
+                这里不会有下降的 ...
+        '''
+        key_seq = []
+
+        poss0 = self.shape_.poss()
+
+        curr_v = (curr_poss[1][0] - curr_poss[0][0], curr_poss[1][1] - curr_poss[0][1])
+        tar_v = (target_poss[1][0] - target_poss[0][0], target_poss[1][1] - target_poss[0][1])
+
+        for i in range(4):
+            if curr_v[0] == tar_v[0] and curr_v[1] == tar_v[1]:
+                break
+            key_seq.append(UP)  # 旋转按键
+            poss = self.shape_.rotate()
+            self.move(poss)
+            curr_v = (poss[1][0] - poss[0][0], poss[1][1] - poss[0][1])
+
+        curr_poss = self.shape_.poss()
+        dx = target_poss[0][1] - curr_poss[0][1]
+        if dx > 0:
+            for i in range(dx):
+                key_seq.append(RIGHT)
+        elif dx < 0:
+            for i in range(-dx):
+                key_seq.append(LEFT)
+
+        self.shape_.set_poss(poss0)
+        return key_seq
+        
+    def save_image_keys(self, keys_seq):
+        ''' 根据 keys 生成 images, 保存, 用于生成训练样本
+        '''
+        keys = {LEFT:2, UP:3, RIGHT:4, DOWN:5, 32:6}
+        self.save_rnn_begin()
+        for k in keys_seq:
+            self.save_rnn_key(k)    # 保存当前图像 + 对应的按键
+
+            # 根据按键, 进行移动
+            if k == LEFT:
+                poss = self.shape_.left()
+                self.move(poss, showing=False)
+            elif k == UP:
+                poss = self.shape_.rotate()
+                self.move(poss, showing=False)
+            elif k == RIGHT:
+                poss = self.shape_.right()
+                self.move(poss, showing=False)
+            elif k == DOWN:
+                assert(k != DOWN)
+        self.save_rnn_end()
+
+
     def save_all(self):
         ''' 保存当前 self.data_, self.shape_, ...
         '''
@@ -355,29 +438,32 @@ class Game:
         self.restore_all()
 
         # 使用权重吧, holes * 3.0 + (self.rows_ - elims) * 2.0 + (self.rows_ - els) * 1.0 + mse * .01
-        rs = [ h*10.0 - e*5.0 + n*1.0 + m*1.0 for h,e,n,m in all_down_results ]
+        rs = [ h*10.0 - e*3.0 + n*1.5 + m*5. for h,e,n,m in all_down_results ]
         rs = np.array(rs)
         idx = np.argmin(rs)
         idx_min = np.where(rs == rs[idx])[0]
         idx = random.randint(0, len(idx_min)-1)
         best_idx = idx_min[idx].item()
         
-        print('==> v={}, h:{}, elims:{}, els:{}, mse:{}'.format(
-                rs[idx],
-                all_down_results[best_idx][0],
-                all_down_results[best_idx][1], all_down_results[best_idx][2],
-                all_down_results[best_idx][3]))
+        # print('==> v={}, h:{}, elims:{}, els:{}, mse:{}'.format(
+        #         rs[idx],
+        #         all_down_results[best_idx][0],
+        #         all_down_results[best_idx][1], all_down_results[best_idx][2],
+        #         all_down_results[best_idx][3]))
 
         return all_start_poss[best_idx]
 
     def auto_get_all_start_poss(self):
-        ''' 生成当前水平移动 + 旋转的所有位置, 返回列表 '''
+        ''' 生成当前水平移动 + 旋转的所有位置, 返回:
+                1. 目标位置
+        '''
         all_poss = []
 
         poss0 = self.shape_.poss()
         for i in range(4):
             ''' 四次旋转后, 每次移动到最左侧, 然后依次右移, 记录允许的启动位置 '''
             self.move(poss0)
+
             for n in range(i):
                 poss = self.shape_.rotate()
                 if not self.can_move(poss):
@@ -394,6 +480,7 @@ class Game:
             poss = self.shape_.poss()    # XXX: 这样只是为了方便 ...
             while self.can_move(poss):
                 self.move(poss, showing=False)
+
                 if poss not in all_poss:
                     all_poss.append(poss)
 
@@ -437,18 +524,11 @@ class Game:
     def auto_get_mse(self, d):
         ''' 每列从低向上看, 根据高度计算 mse, 要尽量保证 mse 比较小
         '''
-        # 需要临时清空当前 shape_ 的占用
-        # for p in self.shape_.poss():
-        #     d[p[0]][p[1]] = 0
-        
         cs = np.split(d, self.cols_, axis=1)
         cs = [ c.reshape((self.rows_,)) for c in cs ]
         hs = [ np.nonzero(c)[0] for c in cs ]
         hs = [ self.rows_ - h[0].item() if len(h) > 0 else 0 for h in hs ]
         hs = np.array(hs)
-
-        # for p in self.shape_.poss():
-        #     d[p[0]][p[1]] = self.shape_.d()
 
         mse = np.sqrt(np.sum(np.power(hs - np.mean(hs), 2)))
         return mse.item()
@@ -494,11 +574,11 @@ if __name__ == '__main__':
     import sys
     if len(sys.argv) == 2 and sys.argv[1] == 'val':
         MODE = 'val'    # 生成校验样本
-        autoplay = False
+        autoplay = True
         save_rnn = True
     elif len(sys.argv) == 2 and sys.argv[1] == 'train':
         MODE = 'train'  # 生成训练样本
-        autoplay = False
+        autoplay = True
         save_rnn = True
     else:
         MODE = 'test'
