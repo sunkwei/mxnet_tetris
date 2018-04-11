@@ -25,5 +25,10 @@
 
 	python train_rnn.py
 
+一个更好的方式是“在线训练”：
+
+	python game.py online
+
+
 
 
