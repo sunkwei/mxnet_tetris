@@ -9,13 +9,14 @@ import copy
 import os.path as osp
 from collections import namedtuple
 import numpy as np
-
+from train_rnn import build_net, Batch, MAX_SEQ_LENGTH
+import mxnet as mx
 
 
 curr_path = osp.dirname(osp.abspath(__file__))
 MODE = 'train'        # 如果生成键盘序列，作为 "train" 集合，还是 "val" 集合？
-START_LEVEL = 1       # 从 8 开始，方便快速生成样本
-EPOCH = 29 # 当自动时,使用的 epoch
+START_LEVEL = 0       # 从 8 开始，方便快速生成样本
+EPOCH = 0 # 当自动时,使用的 epoch
 AUTO_USING_RULE = True # 使用规则 auto_xxx()
 
 
@@ -56,6 +57,7 @@ class Game:
         self.auto_ = autoplay
         self.reset_cnt_ = 0
         if self.auto_:
+            self.blurred_ = False
             if not AUTO_USING_RULE:
                 from inference_rnn import Inference
                 self.pred_ = Inference(epoch=EPOCH)    # 加载 rnn 模型进行预测 ...
@@ -71,6 +73,9 @@ class Game:
             self.rnn_fname_prefix = curr_path+'/rnn_{}'.format(MODE)+'/'+time.strftime('%j%H%M-', time.localtime())
             self.rnn_ops_ = []  # 记录操作序列，[(np(data_), key), ... ]
                             # np(data_) 为当前 self.data_ 的np数组，key 为对当前的操作
+
+        if MODE == 'online' and autoplay:
+            self.prepare_online_train()
 
     def gameover(self):
         return self.over_
@@ -124,17 +129,12 @@ class Game:
         elif AUTO_USING_RULE:
             return 0xff & self.show_.wait_key(10)
         else:
-            ''' 使用 self.pred_ 进行预测 ...
-                最多预测20次, 直到得到 6(空格)
-                其他按键, 则移动到下一个位置, 然后再次预测 ...
-                所以这里总是返回空格按键
-            '''
             return self.pred_seq()
 
     def pred_seq(self):
-        ''' 循环预测, 直到返回6, 或者超过20次预测
+        ''' 循环预测, 直到返回6, 总是返回 32
         '''
-        for i in range(20):
+        for i in range(MAX_SEQ_LENGTH):
             k = self.pred_.pred(self.data2np())
             if k == 6:
                 return 32  # 结束
@@ -151,6 +151,8 @@ class Game:
             
             if self.can_move(poss):
                 self.move(poss)
+            
+            self.show_.wait_key(500)
 
         print('oooooh, cannot got space, JUST do it')
         return 32
@@ -160,9 +162,7 @@ class Game:
             if AUTO_USING_RULE:
                 self.interact0(0.01)
             else:
-                # FIXME: 因为在一行上，可能联系平移，这里给多次机会吧
-                for i in range(1):
-                    self.interact0(0.5, once=True)
+                self.interact0(0.5, once=True)
         else:
             self.interact0(self.level_intervals_[self.curr_level_])
 
@@ -241,7 +241,15 @@ class Game:
         if self.shape_ is None:
             # 新的形状 ..
             if not self.create_new_shape():
-                self.over_ = True
+                if self.save_rnn_:
+                    # 清空重来 ...
+                    self.data_ = [[0 for i in range(self.cols_)] for i in range(self.rows_)]  # 一个二维数组标识当前数据 ...
+                    self.shape_ = None
+                    self.reset_cnt_ += 1
+                    print('GAME OVER, RESET ALL {} times'.format(self.reset_cnt_))
+                    self.eliminate_rows_ = 0
+                else:
+                    self.over_ = True
                 return
             
             if self.auto_ and AUTO_USING_RULE:
@@ -255,16 +263,16 @@ class Game:
                 self.move(pos)
 
         # 当自动保存样本时，如果最高行超过10行，则强制清空所有
-        if self.save_rnn_:
-            # if self.auto_get_empty_lines(self.data2np()) < self.rows_ / 2:
-            # 为了生成初始状态的样本，总是尽快的清空，当消除行后，立即清空，然后从头再来
-            if self.eliminate_rows_ > 0:
-                self.data_ = [[0 for i in range(self.cols_)] for i in range(self.rows_)]  # 一个二维数组标识当前数据 ...
-                self.shape_ = None
-                self.reset_cnt_ += 1
-                print('RESET ALL {} times'.format(self.reset_cnt_))
-                self.eliminate_rows_ = 0
-                return
+        # if self.save_rnn_:
+        #     # if self.auto_get_empty_lines(self.data2np()) < self.rows_ / 2:
+        #     # 为了生成初始状态的样本，总是尽快的清空，当消除行后，立即清空，然后从头再来
+        #     if self.eliminate_rows_ > 1:
+        #         self.data_ = [[0 for i in range(self.cols_)] for i in range(self.rows_)]  # 一个二维数组标识当前数据 ...
+        #         self.shape_ = None
+        #         self.reset_cnt_ += 1
+        #         print('RESET ALL {} times'.format(self.reset_cnt_))
+        #         self.eliminate_rows_ = 0
+        #         return
 
 
         # 处理键盘事件    
@@ -326,14 +334,22 @@ class Game:
         '''
         if self.save_rnn_:
             #self.rnn_ops_.append((self.data2np(), 1))
-            if len(self.rnn_ops_) >= 50:
+            if len(self.rnn_ops_) >= MAX_SEQ_LENGTH:
                 print('WARN: the rnn seq tooooo long !!!')
                 return
-            fname = '{}{}.npz'.format(self.rnn_fname_prefix, self.shapes_)
-            ds = [ r[0] for r in self.rnn_ops_ ]
-            ks = [ r[1] for r in self.rnn_ops_ ]
-            np.savez_compressed(fname, imgs=np.stack(ds), keys=np.array(ks))
-            print('save rnn sample: {}'.format(fname))
+
+            if MODE == 'online':
+                if self.blurred_:
+                    self.blurred_ = False  # 不要学习随机出错的 ..
+                    print('... skip')
+                else:
+                    self.online_train_step(self.rnn_ops_)
+            else:
+                fname = '{}{}.npz'.format(self.rnn_fname_prefix, self.shapes_)
+                ds = [ r[0] for r in self.rnn_ops_ ]
+                ks = [ r[1] for r in self.rnn_ops_ ]
+                np.savez_compressed(fname, imgs=np.stack(ds), keys=np.array(ks))
+                print('save rnn sample: {}'.format(fname))
 
     def save_rnn_key(self, key):
         ''' 保存按键，仅仅四个，上下左右，特别的 "自由下落" 和 "快速下落" 都映射为 down 了,
@@ -438,7 +454,7 @@ class Game:
         self.restore_all()
 
         # 使用权重吧, holes * 3.0 + (self.rows_ - elims) * 2.0 + (self.rows_ - els) * 1.0 + mse * .01
-        rs = [ h*10.0 - e*3.0 + n*1.5 + m*5. for h,e,n,m in all_down_results ]
+        rs = [ h*15.0 - e*1.0 + n*1.5 + m*5. for h,e,n,m in all_down_results ]
         rs = np.array(rs)
         idx = np.argmin(rs)
         idx_min = np.where(rs == rs[idx])[0]
@@ -451,6 +467,12 @@ class Game:
         #         all_down_results[best_idx][1], all_down_results[best_idx][2],
         #         all_down_results[best_idx][3]))
 
+        # XXX: 为了制造点混乱，需要偶尔随机选择一次
+        if self.shapes_ % 11 == 9:
+            x = random.randint(0, len(all_start_poss)-1)
+            print('blurring from {} to {}'.format(best_idx, x))
+            best_idx = x
+            self.blurred_ = True # 不要学习这个 ..
         return all_start_poss[best_idx]
 
     def auto_get_all_start_poss(self):
@@ -569,6 +591,80 @@ class Game:
         return 0
 
 
+    ############################################################
+    def prepare_online_train(self):
+        ''' 准备在线训练模型，总是加载 online-0000.params
+        '''
+        net,stack = build_net()
+        self.mod_ = mx.mod.Module(net, data_names=('data',), label_names=('label',))
+        self.mod_.bind(data_shapes=(('data', (1,MAX_SEQ_LENGTH,20,14)),),      
+                label_shapes=(('label',(1,MAX_SEQ_LENGTH)),), for_training=True)    # batch_size = 1
+
+        if osp.isfile(curr_path + '/online-0000.params'):
+            _,args,auxs = mx.rnn.load_rnn_checkpoint(stack, curr_path + '/online', 0)
+            self.mod_.set_params(args, auxs)
+            print('====resume OK')
+        else:
+            init = mx.init.Xavier(factor_type='in', magnitude=2.34)
+            self.mod_.init_params(init)
+        
+        self.mod_.init_optimizer(optimizer='sgd', optimizer_params=(('learning_rate',0.0001), ('momentum',0.9)))
+        self.online_train_cnt_ = 0
+        self.online_train_stack_ = stack
+        self.online_train_net_ = net
+
+
+    def to_show_array(self, arr):
+        ''' 将 arr 转化为 list，并且从后删除所有 0 '''
+        if isinstance(arr, np.ndarray):
+            arr = arr.reshape(-1).astype(np.int32).tolist()
+        # while len(arr) > 0:
+        #     if arr[-1] == 0:
+        #         del arr[-1]
+        #     else:
+        #         break
+        # if not arr:
+        #     arr.append(0)
+        return arr
+
+
+    def online_train_step(self, rnn_ops):
+        # rnn_ops 为记录的当前按键序列以及对应的 img
+        assert(self.mod_)
+
+        imgs = []
+        keys = []
+        for op in rnn_ops:
+            imgs.append(op[0].reshape((1, self.rows_, self.cols_)).astype(np.float32))
+            keys.append(op[1])
+    
+        imgs += [ np.zeros((1, self.rows_, self.cols_), dtype=np.float32)] * (MAX_SEQ_LENGTH-len(keys))
+        imgs = np.vstack(imgs).reshape((1, MAX_SEQ_LENGTH, self.rows_, self.cols_))
+        labels = np.array(keys + [ 0 ] * (MAX_SEQ_LENGTH - len(keys))).reshape((1, MAX_SEQ_LENGTH))
+
+        batch = Batch([mx.nd.array(imgs)], ['data'], [mx.nd.array(labels)], ['label'], fname=None)
+        self.mod_.forward_backward(batch)
+        self.mod_.update()
+
+        self.online_train_cnt_ += 1
+
+        if self.online_train_cnt_ % 10 == 9:
+            # 打印训练预测输出
+            outss = self.mod_.get_outputs()
+            outs = [ np.argmax(o.asnumpy()) for o in outss]
+            label = batch.label[0].asnumpy()
+            pred = outs
+            print('======= {} ======'.format(self.online_train_cnt_+1))
+            print('    label:{}'.format(self.to_show_array(label)))
+            print('    pred: {}'.format(self.to_show_array(pred)))
+            
+        if self.online_train_cnt_ % 100 == 99:
+            # 保存 checkpoint
+            print('saveing checkpoint')
+            args,auxs = self.mod_.get_params()
+            mx.rnn.save_rnn_checkpoint(self.online_train_stack_, curr_path+'/online', 0, 
+                    self.online_train_net_, args, auxs)
+
 
 if __name__ == '__main__':
     import sys
@@ -580,11 +676,18 @@ if __name__ == '__main__':
         MODE = 'train'  # 生成训练样本
         autoplay = True
         save_rnn = True
+    elif len(sys.argv) == 2 and sys.argv[1] == 'online':
+        MODE = 'online' # 在线训练
+        autoplay = True
+        save_rnn = True
     else:
         MODE = 'test'
         autoplay = True
         save_rnn = False
+        AUTO_USING_RULE = False
+
     game = Game(autoplay=autoplay, save_rnn=save_rnn)
+
     while not game.gameover():
         game.step()
         if game.quit():

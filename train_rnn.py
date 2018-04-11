@@ -185,7 +185,7 @@ def build_net():
     stack = mx.rnn.SequentialRNNCell()
     for i in range(RNN_LAYERS_NUM):
         stack.add(mx.rnn.GRUCell(RNN_HIDDEN_NUM, 'gru_{}_'.format(i)))
-#        stack.add(mx.rnn.Dropout(0.3))
+        stack.add(mx.rnn.DropoutCell(0.2))
     rnn_outputs, rnn_states = stack.unroll(MAX_SEQ_LENGTH, data)
     # 构造 MAX_SEQ_LENGTH 个 softmaxout, 对应每个 rnn_outputs
     labels = mx.sym.split(label, MAX_SEQ_LENGTH)

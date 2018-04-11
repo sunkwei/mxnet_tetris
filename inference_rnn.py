@@ -29,7 +29,7 @@ class Batch:
 class Inference:
     ''' 使用 train_rnn.py 训练的模型进行预测
     '''
-    def __init__(self, prefix=curr_path+'/rnn', epoch=1):
+    def __init__(self, prefix=curr_path+'/online', epoch=0):
         self.prefix_ = prefix
         self.epoch_ = epoch
         self.hidden_num_ = RNN_HIDDEN_NUM
@@ -43,26 +43,34 @@ class Inference:
         init_states = [mx.sym.var('init_state_{}'.format(i), 
                 shape=(1,self.hidden_num_)) for i in range(self.layer_num_) ]
         
-        # conv1 = mx.sym.Convolution(data, name='conv1', kernel=(4,4), pad=(1,1), num_filter=16)
-        # act1 = mx.sym.Activation(conv1, act_type='tanh')
-        # conv2 = mx.sym.Convolution(act1, name='conv2', kernel=(4,4), stride=(2,2), num_filter=64)
-        # act2 = mx.sym.Activation(conv2, act_type='relu')
-        # conv3 = mx.sym.Convolution(act2, name='conv3', kernel=(3,3), stride=(2,2), num_filter=128)
-        # act3 = mx.sym.Activation(conv3, act_type='relu')
-        # data = mx.sym.reshape(act3, (0,1,-1))
+        conv1_weight = mx.sym.var(name='conv1_weight')
+        conv1_bias = mx.sym.var(name='conv1_bias')
+        conv1 = mx.sym.Convolution(data, weight=conv1_weight, bias=conv1_bias,
+                num_filter=16, kernel=(4,4), pad=(1,1), stride=(2,2))
+        data = mx.sym.Activation(conv1, act_type='relu')
 
         stack = mx.rnn.SequentialRNNCell()
         for i in range(layer_num):
             cell = mx.rnn.GRUCell(hidden_num, prefix='gru_{}_'.format(i))
             stack.add(cell)
-        outputs, states = stack.unroll(1, data, begin_state=init_states)
-        fc = mx.sym.FullyConnected(outputs[0], num_hidden=64, name='fc1')
-        act = mx.sym.Activation(fc, act_type='relu')
-        fc = mx.sym.FullyConnected(act, num_hidden=OUT_NUM, name='fc2') # 将使用 params 中的 fc_weight/fc_bias
-        pred = mx.sym.softmax(fc, axis=1)
+
+        outputs, states = stack.unroll(1, [data], begin_state=init_states)
+
+        fc1_weight = mx.sym.var(name='fc1_weight')
+        fc1_bias = mx.sym.var(name='fc1_bias')
+        #
+        fc2_weight = mx.sym.var(name='fc2_weight')
+        fc2_bias = mx.sym.var(name='fc2_bias')
+
+        fc1 = mx.sym.FullyConnected(outputs[0], num_hidden=64, weight=fc1_weight, bias=fc1_bias)
+        act = mx.sym.Activation(fc1, act_type='relu')
+        fc2 = mx.sym.FullyConnected(act, num_hidden=OUT_NUM, weight=fc2_weight, bias=fc2_bias)
+        
+        pred = mx.sym.softmax(fc2, axis=1)
         outs = [pred]
         outs.extend([s for s in states ]) # states 将作为下一个输入的 init_state_N 输入
         return mx.sym.Group(outs), stack
+
 
     def build_mod(self, net, stack):
         ''' XXX: init_state_XX 通过 set_params 传递 ?
@@ -113,12 +121,11 @@ class Inference:
         ''' 输入 img 为 numpy array, shape = (20,14)
             输出为 [0,1,2,3,4,5] 中的一个
 
-            img 需要二值化
         '''
         img = img.astype(np.float32)
-        idx = img[:,:] > 0  # 二值化
-        img[idx] = 1.0
-        img -= 0.1
+        # idx = img[:,:] > 0  # 二值化
+        # img[idx] = 1.0
+        # img -= 0.1
         self.show_img(img, self.step_)
         img = img.reshape((1,1,20,14))
         batch = Batch(img, self.last_state_)
@@ -169,7 +176,7 @@ if __name__ == '__main__':
     else:
         n = sys.argv[1]
 
-    predictor = Inference(epoch=4)
+    predictor = Inference(epoch=0)
     imgs, keys = _load_npz(curr_path+'/rnn_test/{}.npz'.format(n))
     idx = imgs[:,:,:,:] > 0
     imgs[idx] = 1

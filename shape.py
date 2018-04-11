@@ -9,6 +9,9 @@ class ShapeFactory:
         ''' top_center=(0, 7), 指的是创建的形状尽量使用 (0, 7) 作为其实位置
         '''
         n = random.randint(1, 7)    # 7 种基本形状
+        while n != 3 and n != 6:
+            n = random.randint(1, 7)
+
         class_name = 'Shape_{}'.format(n)
         shape = eval(class_name)(top_center)
         return shape
