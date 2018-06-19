@@ -214,7 +214,7 @@ class Game:
     def create_new_shape(self):
         ''' 如果空间不够，返回 False
         '''
-        self.shape_ = self.factory.create(self.cols_/2-1)
+        self.shape_ = self.factory.create(int(self.cols_/2-1))
         poss = self.shape_.poss()
         # poss 占用的空间不能有非 0
         empty = True
@@ -468,11 +468,11 @@ class Game:
         #         all_down_results[best_idx][3]))
 
         # XXX: 为了制造点混乱，需要偶尔随机选择一次
-        if self.shapes_ % 11 == 9:
-            x = random.randint(0, len(all_start_poss)-1)
-            print('blurring from {} to {}'.format(best_idx, x))
-            best_idx = x
-            self.blurred_ = True # 不要学习这个 ..
+        # if self.shapes_ % 11 == 9:
+        #     x = random.randint(0, len(all_start_poss)-1)
+        #     print('blurring from {} to {}'.format(best_idx, x))
+        #     best_idx = x
+        #     self.blurred_ = False # 不要学习这个 ..
         return all_start_poss[best_idx]
 
     def auto_get_all_start_poss(self):
